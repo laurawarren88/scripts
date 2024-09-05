@@ -1,113 +1,84 @@
 #!/bin/bash
+
 #dns setup
-check_connected=$( nmcli | grep "ens" )
-echo $check_connected
 
-DHCP_IP=$( hostname -I )
-echo $DHCP_IP
+# Grab the IP address for ens33 interface
+DNS_IP=$(hostname -I | awk '{print $1}')
+echo "DNS IP: $DNS_IP"
 
-echo -e "nameserver 8.8.8.8\nnameserver 8.8.4.4" | tee /etc/resolv.conf
-
-#Add information to network scripts - Boot Protocol, IP Address and Gateway
+# Define network script paths
 NETWORK_SCRIPT="/etc/sysconfig/network-scripts/ifcfg-ens33"
+SYSCONFIG="/etc/sysconfig/network"
+HOSTS_FILE="/etc/hosts"
 
-#Adding IP address
-IPADDR=10.0.0.3 >> $NETWORK_SCRIPT
-grep -q '^IPADDR=' $NETWORK_SCRIPT && \
-sed -i 's/^IPADDR=.*/IPADDR=10.0.0.3/' $NETWORK_SCRIPT ||
-echo 'IPADDR=10.0.0.3' >> $NETWORK_SCRIPT
+# Define network script paths
+NETWORK_SCRIPT="/etc/sysconfig/network-scripts/ifcfg-ens33"
+SYSCONFIG="/etc/sysconfig/network"
+HOSTS_FILE="/etc/hosts"
 
-#Adding Gateway address
-GATEWAY=10.0.0.1 >> $NETWORK_SCRIPT
-grep -q '^GATEWAY=' $NETWORK_SCRIPT && \
-sed -i 's/^GATEWAY=.*/GATEWAY=10.0.0.1/' $NETWORK_SCRIPT || \
-echo 'GATEWAY=10.0.0.1' >> $NETWORK_SCRIPT
+# Function to update network config
+update_network_config() {
+    local key=$1
+    local value=$2
+    local file=$3
+
+    if grep -q "^$key=" $file; then
+        sed -i "s/^$key=.*/$key=$value/" $file
+    else
+        echo "$key=$value" >> $file
+    fi
+}
+
+# Set static IP, Gateway, DNS, and domain in network script
+update_network_config "IPADDR" "10.0.0.3" $NETWORK_SCRIPT
+update_network_config "GATEWAY" "10.0.0.1" $NETWORK_SCRIPT
+update_network_config "DNS" "10.0.0.3" $NETWORK_SCRIPT
+update_network_config "DOMAIN" "lmw.local" $NETWORK_SCRIPT
 
 #Change the BOOTPROTO to static
 sed -i 's/BOOTPROTO=dhcp/BOOTPROTO=static/' $NETWORK_SCRIPT
 
-#Adding DNS address
-DNS=10.0.0.3 >> $NETWORK_SCRIPT
-grep -q '^DNS=' $NETWORK_SCRIPT && \
-sed -i 's/^DNS=.*/DNS=10.0.0.3/' $NETWORK_SCRIPT || \
-echo 'DNS=10.0.0.3' >> $NETWORK_SCRIPT
+# Configure /etc/sysconfig/network
+update_network_config "NETWORKING" "yes" $SYSCONFIG
+update_network_config "NETWORKING_IPV6" "no" $SYSCONFIG
+update_network_config "HOSTNAME" "lmw.local" $SYSCONFIG
+update_network_config "GATEWAY" "10.0.0.1" $SYSCONFIG
 
-#Adding a domain
-DOMAIN="lmw.local" >> $NETWORK_SCRIPT
-grep -q '^DOMAIN=' $NETWORK_SCRIPT && \
-sed -i 's/^DOMAIN=.*/DOMAIN=lmw.local/' $NETWORK_SCRIPT || \
-echo 'DOMAIN=lmw.local' >> $NETWORK_SCRIPT
-
-#Let's set up our system Configuration
-SYSCONFIG="/etc/sysconfig/network"
-
-#Adding Neworking
-NETWORKING="yes" >> $SYSCONFIG
-grep -q '^NETWORKING=' $SYSCONFIG && \
-sed -i 's/^NETWORKING=.*/NETWORKING=yes/' $SYSCONFIG ||
-echo 'NETWORKING=yes' >> $SYSCONFIG
-
-#Removing Neworking IPV6
-NETWORKING_IPV6="no" >> $SYSCONFIG
-grep -q '^NETWORKING_IPV6=' $SYSCONFIG && \
-sed -i 's/^NETWORKING_IPV6=.*/NETWORKING_IPV6=no/' $SYSCONFIG ||
-echo 'NETWORKING_IPV6=no' >> $SYSCONFIG
-
-#Setting Hostname
-HOSTNAME="lmw.local" >> $SYSCONFIG
-grep -q '^HOSTNAME=' $SYSCONFIG && \
-sed -i 's/^HOSTNAME=.*/HOSTNAME=lmw.local/' $SYSCONFIG ||
-echo 'HOSTNAME=lmw.local' >> $SYSCONFIG
-
-#Adding the gateway
-GATEWAY=10.0.0.1 >> $SYSCONFIG
-grep -q '^GATEWAY=' $SYSCONFIG && \
-sed -i 's/^GATEWAY=.*/GATEWAY=10.0.0.1/' $SYSCONFIG ||
-echo 'GATEWAY=10.0.0.1' >> $SYSCONFIG
-
-#Let's set up our host
-# Define the /etc/hosts file path
-HOSTS_FILE="/etc/hosts"
-
-# Add the line "10.0.0.3 lmw.local" if it doesn't already exist, accounting for tabs and spaces
-if ! grep -qP "^\s*10\.0\.0\.3\s+lmw\.local\s*$" $HOSTS_FILE; then
-    echo "Adding '10.0.0.3 lmw.local' to $HOSTS_FILE"
-    bash -c "echo -e '10.0.0.3\tlmw.local' >> $HOSTS_FILE"
+# Update /etc/hosts with static IP and hostname
+if ! grep -q "10.0.0.3 lmw.local" $HOSTS_FILE; then
+    echo "10.0.0.3 lmw.local" >> $HOSTS_FILE
 fi
 
-# Modify the line with 127.0.0.1
-if grep -qP "^\s*127\.0\.0\.1\s+localhost" $HOSTS_FILE; then
-    echo "Modifying 127.0.0.1 line in $HOSTS_FILE"
-    sed -i 's/^\s*127\.0\.0\.1\s+.*/127.0.0.1 lmw.local localhost/' $HOSTS_FILE
-fi
+# Ensure 127.0.0.1 entry is correct
+sed -i 's/127\.0\.0\.1.*/127.0.0.1 lmw.local localhost/' $HOSTS_FILE
 
-#Hosts file update complete.
-
-#Ensure hostname is set
+# Set hostname and restart hostnamed service
 hostnamectl set-hostname lmw.local
 systemctl restart systemd-hostnamed
-DNS_HOSTNAME=$( hostname -f)
-echo $DNS_HOSTNAME
 
+# Set up basic nameservers
+echo -e "nameserver 8.8.8.8\nnameserver 8.8.4.4" | tee /etc/resolv.conf
+
+#Set default route
 ip route add default via 10.0.0.1 dev ens33
 
-#Now all the files have been configured, lets sort out the firewall
+#Firewall configuration for DNS (port 53)
 firewall-cmd --zone=public --add-port=53/tcp --permanent
 firewall-cmd --zone=public --add-port=53/udp --permanent
 firewall-cmd --permanent --zone=public --add-icmp-block-inversion
-systemctl restart firewalld
+firewall-cmd --reload
+
+sleep 10
 
 #Update mirrorlist and where gets CentOS
 sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*
 sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
 
-#updating packages
-yum update -y
-#upgrading packages
-yum upgrade -y
-#Install other necessary DHCP packages
+sleep 10
+
+# Update and install packages
+yum update -y 
 yum makecache
-Install BIND
 yum install bind bind-utils -y
 
 #Creating three files to set up your DNS
@@ -191,7 +162,6 @@ bash -c "echo '' >> $REV_ZONE_FILE"
 bash -c "echo '1       IN      PTR     gateway.lmw.local.   ;10.0.0.1' >> $REV_ZONE_FILE"
 bash -c "echo '2       IN      PTR     dhcp.lmw.local.      ;10.0.0.2' >> $REV_ZONE_FILE"
 bash -c "echo '3       IN      PTR     lmw.local.        ;10.0.0.3' >> $REV_ZONE_FILE"
-
 #Both $FWD_ZONE_FILE and $REV_ZONE_FILE have been overwritten with the new zone information.
 
 #Check that the files have compiled correctly and work
@@ -203,8 +173,6 @@ systemctl restart named
 systemctl enable named
 
 #Lets check it works
-ping -c 3 8.8.8.8
-ping -c 2 10.0.0.1
-ping -c 2 10.0.0.2
+ping -c 2 8.8.8.8
 ping -c 2 google.co.uk
 
