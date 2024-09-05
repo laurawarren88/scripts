@@ -6,6 +6,8 @@ echo $check_connected
 DHCP_IP=$( hostname -I )
 echo $DHCP_IP
 
+echo -e "nameserver 8.8.8.8\nnameserver 8.8.4.4" | tee /etc/resolv.conf
+
 #Add information to network scripts - Boot Protocol, IP Address and Gateway
 NETWORK_SCRIPT="/etc/sysconfig/network-scripts/ifcfg-ens33"
 
@@ -87,9 +89,12 @@ systemctl restart systemd-hostnamed
 DNS_HOSTNAME=$( hostname -f)
 echo $DNS_HOSTNAME
 
+ip route add default via 10.0.0.1 dev ens33
+
 #Now all the files have been configured, lets sort out the firewall
 firewall-cmd --zone=public --add-port=53/tcp --permanent
 firewall-cmd --zone=public --add-port=53/udp --permanent
+firewall-cmd --permanent --zone=public --add-icmp-block-inversion
 systemctl restart firewalld
 
 #Update mirrorlist and where gets CentOS
@@ -103,7 +108,7 @@ yum upgrade -y
 #Install other necessary DHCP packages
 yum makecache
 Install BIND
-yum install bind bind-utils
+yum install bind bind-utils -y
 
 #Creating three files to set up your DNS
 touch /etc/named.conf /var/named/fwd.lmw.local /var/named/rev.lmw.local

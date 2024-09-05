@@ -22,6 +22,8 @@ DEVICE=ens35
 ONBOOT=yes
 IPADDR=10.0.0.1
 DNS=10.0.0.3
+DNS1=8.8.8.8
+DNS2=8.8.4.4
 EOL"
 
 systemctl restart NetworkManager
@@ -77,12 +79,10 @@ firewall-cmd --permanent --zone=public --add-masquerade
 # Add forward-ports
 firewall-cmd --permanent --zone=public --add-forward-port=port=67:proto=tcp:toport=80:toaddr=10.0.0.2
 firewall-cmd --permanent --zone=public --add-forward-port=port=53:proto=tcp:toport=80:toaddr=10.0.0.3
+firewall-cmd --permanent --zone=public --add-icmp-block-inversion
 
 # Reload firewall to apply changes
 firewall-cmd --reload
-
-# Display the firewall configuration
-#firewall-cmd --zone=public --list-all
 
 # Add static route using detected gateway IP
 echo "Adding static route for $GATEWAY_IP"
@@ -93,10 +93,6 @@ echo "Setting up default route via $GATEWAY_IP"
 ip route add default via $GATEWAY_IP dev ens35 metric 101
 
 # Add a specific route for 10.0.0.0/8 via ens35
-#echo "Adding route for 10.0.0.0/8"
-#ip route add 10.0.0.0/8 dev ens35 proto kernel scope link src $IP_ENS35 metric 101
-
-# Add a specific route for 10.0.0.0/8 via ens35
 echo "Adding route for 10.0.0.0/8"
 ip route add 10.0.0.0/8 src $IP_ENS35 dev ens35 metric 101
 
@@ -105,27 +101,16 @@ echo "Saving persistent routes"
 echo "GATEWAY=$GATEWAY_IP" >> /etc/sysconfig/network-scripts/ifcfg-ens35
 echo "$GATEWAY_IP/32 dev ens35" >> /etc/sysconfig/network-scripts/route-ens35
 
-
 #Restart the server
 systemctl restart NetworkManager
-sleep 5
-
-#check_connected=$(nmcli | grep "ens" )
-#echo $check_connected
 
 # Check connected interfaces
 check_connected=$(nmcli | grep "ens")
 echo $check_connected
 
-#external_network=$( hostname -i )
-#echo "IP: $external_network"
-
 # Display the external network IP
 external_network=$(hostname -I | awk '{print $1}')
 echo "External IP: $external_network"
-
-#internal_network=$( ifconfig | grep "broadcast"| cut -d " " -f 10 | grep 10 )
-#echo "Internal IP: $internal_network"
 
 # Display the internal network IP
 internal_network=$(ip -4 addr show ens35 | grep -oP "(?<=inet\s)\d+(\.\d+){3}")
