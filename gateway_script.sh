@@ -22,15 +22,13 @@ DEVICE=ens35
 ONBOOT=yes
 IPADDR=10.0.0.1
 DNS=10.0.0.3
-DNS1=8.8.8.8
-DNS2=8.8.4.4
 EOL"
 
 systemctl restart NetworkManager
 
 # Dynamically get the IPs for ens33 and ens35
 IP_ENS33=$(nmcli -g IP4.ADDRESS dev show ens33 | cut -d'/' -f1)
-#IP_ENS35=$(nmcli -g IP4.ADDRESS dev show ens35 | cut -d'/' -f1)
+
 # Retrieve the IP address of ens35
 IP_ENS35=$(ip -4 addr show ens35 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
 
@@ -53,8 +51,6 @@ fi
 grep -q "^DNS=10.0.0.3" $IFCFG_ENS33 | tee -a $IFCFG_ENS33
 
 # Disable SELinux
-echo "Disabling SELinux"
-sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/sysconfig/selinux
 setenforce 0
 
 # Set the interfaces
@@ -85,19 +81,9 @@ firewall-cmd --permanent --zone=public --add-icmp-block-inversion
 firewall-cmd --reload
 
 # Add static route using detected gateway IP
-echo "Adding static route for $GATEWAY_IP"
 ip route add $GATEWAY_IP/32 dev ens35
-
-# Set up the default route through the detected gateway IP
-echo "Setting up default route via $GATEWAY_IP"
 ip route add default via $GATEWAY_IP dev ens35 metric 101
-
-# Add a specific route for 10.0.0.0/8 via ens35
-echo "Adding route for 10.0.0.0/8"
-ip route add 10.0.0.0/8 src $IP_ENS35 dev ens35 metric 101
-
 # Ensure persistent routes
-echo "Saving persistent routes"
 echo "GATEWAY=$GATEWAY_IP" >> /etc/sysconfig/network-scripts/ifcfg-ens35
 echo "$GATEWAY_IP/32 dev ens35" >> /etc/sysconfig/network-scripts/route-ens35
 
@@ -118,13 +104,10 @@ echo "Internal IP: $internal_network"
 
 #allow port forwarding
 sysctl -w net.ipv4.ip_forward=1
-#bash -c "echo 'net.ipv4.ip_forward=1'>>/etc/sysctl.conf"
+
 # Check if net.ipv4.ip_forward=1 is already in /etc/sysctl.conf
 if ! grep -q "^net.ipv4.ip_forward=1" /etc/sysctl.conf; then
     echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-    echo "Port forwarding enabled in /etc/sysctl.conf"
-else
-    echo "Port forwarding is already enabled in /etc/sysctl.conf"
 fi
 
 #Gateway setup complete
