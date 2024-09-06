@@ -11,11 +11,6 @@ NETWORK_SCRIPT="/etc/sysconfig/network-scripts/ifcfg-ens33"
 SYSCONFIG="/etc/sysconfig/network"
 HOSTS_FILE="/etc/hosts"
 
-# Define network script paths
-NETWORK_SCRIPT="/etc/sysconfig/network-scripts/ifcfg-ens33"
-SYSCONFIG="/etc/sysconfig/network"
-HOSTS_FILE="/etc/hosts"
-
 # Function to update network config
 update_network_config() {
     local key=$1
@@ -81,92 +76,155 @@ yum update -y
 yum makecache
 yum install bind bind-utils -y
 
-#Creating three files to set up your DNS
-touch /etc/named.conf /var/named/fwd.lmw.local /var/named/rev.lmw.local
-chmod a+rwx /etc/named.conf
-chmod a+rwx /var/named/fwd.lmw.local
-chmod a+rwx /var/named/rev.lmw.local
-#All done with full permissions
+#Now we can restart the BIND packages 
+systemctl restart named
+systemctl enable named
 
-#Now lets edit the first file: /etc/named.conf and input the zones
-# Define the named.conf file path
+# Generate rndc key
+echo "Generating rndc key..."
+rndc-confgen -a -b 512
+chown named:named /etc/rndc.key
+chmod 600 /etc/rndc.key
+
+# Ensure BIND is running
+systemctl restart named
+
 NAMED_CONF="/etc/named.conf"
+echo "Modifying named.conf..."
 
-# Modify the "listen-on port 53" line
-sed -i '/listen-on port 53 {/!b;n;c\listen-on port 53 { 127.0.0.1; 10.0.0.3; };' $NAMED_CONF
-sed -i 's|listen-on port 53 { 127.0.0.1; };|listen-on port 53 { 127.0.0.1; 10.0.0.3; };|' $NAMED_CONF
+# Add controls section for rndc if not already present
+if ! grep -q 'controls {' $NAMED_CONF; then
+    cat <<EOL >> $NAMED_CONF
+controls {
+    inet 127.0.0.1 allow { localhost; } keys { "rndc-key"; };
+};
 
-# Modify the "listen-on-v6 port 53" line
-sed -i '/listen-on-v6   { none; };/!b;n;c\listen-on-v6  { none; };' $NAMED_CONF
-sed -i 's|listen-on-v6.*|listen-on-v6 { none; };|' $NAMED_CONF
-
-# Modify the "allow-query" line
-sed -i '/allow-query {/!b;n;c\allow-query { localhost; 10.0.0.0/24; any; };' $NAMED_CONF
-sed -i 's|allow-query { localhost; };|allow-query { localhost; 10.0.0.0/24; any; };|' $NAMED_CONF
-
-# Add the "forwarders" section before the closing '};' of the options block
-if ! grep -q "forwarders {" $NAMED_CONF; then
-    sudo sed -i '/options {/,/};/ s|};| forwarders {\n          8.8.8.8;\n              8.8.4.4;\n      };\n    forward only;\n};|' $NAMED_CONF
+key "rndc-key" {
+    algorithm hmac-md5;
+    secret "$(grep secret /etc/rndc.key | awk '{print $2}' | tr -d '\";')";
+};
+EOL
 fi
 
+# Add forward and reverse zone configuration if not present
 if ! grep -q 'zone "lmw.local" IN {' $NAMED_CONF; then
-bash -c "cat <<EOL >> $NAMED_CONF
+    cat <<EOL >> $NAMED_CONF
 
-zone \"lmw.local\" IN {
-        type master;
-        file \"/var/named/fwd.lmw.local\";
-        allow-update { none; };
+zone "lmw.local" IN {
+    type master;
+    file "/var/named/fwd.lmw.local";
+    allow-update { key "rndc-key"; };
 };
 
-zone \"0.0.10.in-addr.arpa\" IN {
-        type master;
-        file \"/var/named/rev.lmw.local\";
-        allow-update { none; };
+zone "0.0.10.in-addr.arpa" IN {
+    type master;
+    file "/var/named/rev.lmw.local";
+    allow-update { key "rndc-key"; };
 };
-EOL"
+EOL
 fi
 
-# Define the file paths
-FWD_ZONE_FILE="/var/named/fwd.lmw.local"
-REV_ZONE_FILE="/var/named/rev.lmw.local"
+# Set proper permissions for zone files
+chown named:named $FWD_ZONE_FILE $REV_ZONE_FILE
+chmod 644 $FWD_ZONE_FILE $REV_ZONE_FILE
 
-bash -c "echo '\$TTL 86400' > $FWD_ZONE_FILE"
-bash -c "echo '@       IN      SOA     dns.lmw.local. hostmaster.lmw.local. (' >> $FWD_ZONE_FILE"
-bash -c "echo '                        2024083012 ;Serial' >> $FWD_ZONE_FILE"
-bash -c "echo '                        3600 ;Refresh' >> $FWD_ZONE_FILE"
-bash -c "echo '                        1800 ;Retry' >> $FWD_ZONE_FILE"
-bash -c "echo '                        1209600 ;Expire' >> $FWD_ZONE_FILE"
-bash -c "echo '                        86400 ;Minimum TTL' >> $FWD_ZONE_FILE"
-bash -c "echo '                )' >> $FWD_ZONE_FILE"
-bash -c "echo '' >> $FWD_ZONE_FILE"
-bash -c "echo '@       IN      NS      dns.lmw.local.' >> $FWD_ZONE_FILE"
-bash -c "echo '@       IN      A       10.0.0.3' >> $FWD_ZONE_FILE"
-bash -c "echo '' >> $FWD_ZONE_FILE"
-bash -c "echo 'lmw.local.      IN      A       10.0.0.3' >> $FWD_ZONE_FILE"
-bash -c "echo 'www             IN      CNAME   lmw.local.' >> $FWD_ZONE_FILE"
-bash -c "echo 'gateway         IN      A       10.0.0.1' >> $FWD_ZONE_FILE"
-bash -c "echo 'dhcp            IN      A       10.0.0.2' >> $FWD_ZONE_FILE"
-bash -c "echo 'dns             IN      A       10.0.0.3' >> $FWD_ZONE_FILE"
+echo "Checking zone file syntax..."
+named-checkzone lmw.local $FWD_ZONE_FILE
+named-checkzone 0.0.10.in-addr.arpa $REV_ZONE_FILE
 
-bash -c "echo '\$TTL 86400' > $REV_ZONE_FILE"
-bash -c "echo '@       IN      SOA     dns.lmw.local. hostmaster.lmw.local. (' >> $REV_ZONE_FILE"
-bash -c "echo '                        2024083012 ;Serial' >> $REV_ZONE_FILE"
-bash -c "echo '                        3600 ;Refresh' >> $REV_ZONE_FILE"
-bash -c "echo '                        1800 ;Retry' >> $REV_ZONE_FILE"
-bash -c "echo '                        1209600 ;Expire' >> $REV_ZONE_FILE"
-bash -c "echo '                        86400 ;Minimum TTL' >> $REV_ZONE_FILE"
-bash -c "echo '                )' >> $REV_ZONE_FILE"
-bash -c "echo '' >> $REV_ZONE_FILE"
-bash -c "echo '@       IN      NS      dns.lmw.local.' >> $REV_ZONE_FILE"
-bash -c "echo '' >> $REV_ZONE_FILE"
-bash -c "echo '1       IN      PTR     gateway.lmw.local.   ;10.0.0.1' >> $REV_ZONE_FILE"
-bash -c "echo '2       IN      PTR     dhcp.lmw.local.      ;10.0.0.2' >> $REV_ZONE_FILE"
-bash -c "echo '3       IN      PTR     lmw.local.        ;10.0.0.3' >> $REV_ZONE_FILE"
-#Both $FWD_ZONE_FILE and $REV_ZONE_FILE have been overwritten with the new zone information.
+# Reload BIND and check status
+echo "Reloading BIND and checking status..."
+systemctl restart named
+rndc reload
+rndc status
 
-#Check that the files have compiled correctly and work
-named-checkzone lmw.local /var/named/fwd.lmw.local
-named-checkzone lmw.local /var/named/rev.lmw.local
+echo "BIND setup completed."
+
+# Path to rndc key
+RNDC_KEY="/etc/rndc.key"
+
+# Extract the secret for nsupdate
+RNDC_SECRET=$(grep secret $RNDC_KEY | awk '{print $2}' | tr -d '";')
+
+# Create a temp file for nsupdate commands
+NSUPDATE_FILE="/tmp/nsupdate.txt"
+
+# Function to perform DNS updates using nsupdate
+nsupdate_add_record() {
+    local record_name=$1
+    local record_type=$2
+    local record_value=$3
+
+# Set proper permissions for zone files
+chown named:named $FWD_ZONE_FILE $REV_ZONE_FILE
+chmod 644 $FWD_ZONE_FILE $REV_ZONE_FILE
+
+echo "Checking zone file syntax..."
+named-checkzone lmw.local $FWD_ZONE_FILE
+named-checkzone 0.0.10.in-addr.arpa $REV_ZONE_FILE
+
+# Reload BIND and check status
+echo "Reloading BIND and checking status..."
+systemctl restart named
+rndc reload
+rndc status
+
+echo "BIND setup completed."
+
+# Path to rndc key
+RNDC_KEY="/etc/rndc.key"
+
+# Extract the secret for nsupdate
+RNDC_SECRET=$(grep secret $RNDC_KEY | awk '{print $2}' | tr -d '";')
+
+# Create a temp file for nsupdate commands
+NSUPDATE_FILE="/tmp/nsupdate.txt"
+
+# Function to perform DNS updates using nsupdate
+nsupdate_add_record() {
+    local record_name=$1
+    local record_type=$2
+    local record_value=$3
+
+    echo "server 127.0.0.1" > $NSUPDATE_FILE
+    echo "key rndc-key $RNDC_SECRET" >> $NSUPDATE_FILE
+    echo "zone lmw.local" >> $NSUPDATE_FILE
+    echo "update add $record_name 86400 $record_type $record_value" >> $NSUPDATE_FILE
+    echo "send" >> $NSUPDATE_FILE
+
+    # Run nsupdate
+    nsupdate -v $NSUPDATE_FILE
+}
+
+# Function to remove DNS record using nsupdate
+nsupdate_delete_record() {
+    local record_name=$1
+    local record_type=$2
+
+    echo "server 127.0.0.1" > $NSUPDATE_FILE
+    echo "key rndc-key $RNDC_SECRET" >> $NSUPDATE_FILE
+    echo "zone lmw.local" >> $NSUPDATE_FILE
+    echo "update delete $record_name $record_type" >> $NSUPDATE_FILE
+    echo "send" >> $NSUPDATE_FILE
+
+    # Run nsupdate
+    nsupdate -v $NSUPDATE_FILE
+}
+
+# Add example A records dynamically using nsupdate
+echo "Adding A records via nsupdate..."
+nsupdate_add_record "newhost.lmw.local." "A" "10.0.0.4"
+nsupdate_add_record "anotherhost.lmw.local." "A" "10.0.0.5"
+
+# Optionally, delete a record
+# echo "Deleting A record for newhost.lmw.local..."
+# nsupdate_delete_record "newhost.lmw.local." "A"
+
+# Clean up temporary file
+rm -f $NSUPDATE_FILE
+
+# Reload BIND after nsupdate changes
+rndc reload
 
 #Now we can restart the BIND packages 
 systemctl restart named
@@ -174,5 +232,4 @@ systemctl enable named
 
 #Lets check it works
 ping -c 2 8.8.8.8
-ping -c 2 google.co.uk
-
+ping -c 2 google.com
